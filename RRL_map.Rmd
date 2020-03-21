@@ -9,17 +9,19 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(cowplot)
 library(nhdR)
-library(raster)
 library(sf)
 library(foreign)
 library(tidyverse)
 library(httr)
 library(USAboundaries)
 library(ggrepel)
-library(devtools)
 library(magrittr)
 library(rgdal)
 library(ggspatial)
+library(geosphere)
+library(rworldmap)
+library(rnaturalearth)
+library(rnaturalearthdata)
 ```
 
 #### Create or load geospatial data
@@ -44,7 +46,7 @@ study_area_utm<-tribble(~easting, ~northing,
 ```{r}
 #convert from UTM to geo and put in dataframe
 study_area_utm2 <- SpatialPoints(study_area_utm, proj4string=CRS("+proj=utm +zone=12T +datum=WGS84")) 
-study_area_geo <- spTransform(sputm, CRS("+proj=longlat +datum=WGS84"))
+study_area_geo <- spTransform(study_area_utm2, CRS("+proj=longlat +datum=WGS84"))
 
 study_area<-tibble(long=c(study_area_geo@coords[,1]), lat=c(study_area_geo@coords[,2]))
 ```
@@ -213,8 +215,9 @@ RRL_point<-tibble(x=-111.8499, y=44.6441)
 RRL_label1<-tibble(x=-109, y=45.3, label = "National Wildlife Refuge")
 RRL_label2<-tibble(x=-109.5, y=45.95, label = "Red Rock Lakes")
 
-
 # load in world and state sf
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
 states <- st_as_sf(map("state", plot = FALSE, fill = TRUE))
 mt_state<-states %>% 
   filter(ID == "montana")
