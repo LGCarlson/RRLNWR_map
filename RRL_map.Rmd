@@ -1,0 +1,307 @@
+---
+title: "Red Rock Lakes NWR Map for CED"
+author: "LGCarlson"
+date: "3/6/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(cowplot)
+library(nhdR)
+library(raster)
+library(sf)
+library(foreign)
+library(tidyverse)
+library(httr)
+library(USAboundaries)
+library(ggrepel)
+library(devtools)
+library(magrittr)
+library(rgdal)
+library(ggspatial)
+```
+
+#### Create or load geospatial data
+
+##### Study area
+
+```{r}
+#read in coords from Cody in UTM
+study_area_utm<-tribble(~easting, ~northing, 
+                      430025,	4945260,
+                      430025,	4943760,
+                      430775,	4943760,
+                      430775,	4943010,
+                      431525,	4943010,
+                      431525,	4940760,
+                      435275,	4940760,
+                      435275,	4945260,
+                      430025,	4945260)
+```
+
+
+```{r}
+#convert from UTM to geo and put in dataframe
+study_area_utm2 <- SpatialPoints(study_area_utm, proj4string=CRS("+proj=utm +zone=12T +datum=WGS84")) 
+study_area_geo <- spTransform(sputm, CRS("+proj=longlat +datum=WGS84"))
+
+study_area<-tibble(long=c(study_area_geo@coords[,1]), lat=c(study_area_geo@coords[,2]))
+```
+
+```{r}
+#test plot study area boundary
+ggplot() + 
+  geom_polygon(data=study_area, aes(x=long,y=lat), fill="#f0f0f0", color="black",size=0.9, alpha=0.5)  
+```
+
+```{r}
+# I straightened out the points a little because reprojecting them made them no longer square
+study_area_sq<-tribble(~long, ~lat, 
+                      -111.8825,	44.65730,
+                      -111.8825,	44.64380,
+                      -111.8728,	44.64380,
+                      -111.8728,	44.63710,
+                      -111.86207,	44.63710,
+                      -111.86207,	44.61720,
+                      -111.8160,	44.61720,
+                      -111.8160,	44.65730)
+```
+
+
+##### Rivers and streams
+
+```{r, echo=F}
+# get flowlines function
+get_flowlines <- function(streamorder, mapRange){
+  postURL <- "https://cida.usgs.gov/nwc/geoserver/nhdplus/ows"
+  
+  filterXML <- paste0('<?xml version="1.0"?>',
+                      '<wfs:GetFeature xmlns:wfs="http://www.opengis.net/wfs" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:gml="http://www.opengis.net/gml" service="WFS" version="1.1.0" outputFormat="shape-zip" xsi:schemaLocation="http://www.opengis.net/wfs http://schemas.opengis.net/wfs/1.1.0/wfs.xsd">',
+                      '<wfs:Query xmlns:feature="https://gov.usgs.cida/nhdplus" typeName="feature:nhdflowline_network" srsName="EPSG:4326">',
+                      '<ogc:Filter xmlns:ogc="http://www.opengis.net/ogc">',
+                      '<ogc:And>',
+                      '<ogc:PropertyIsGreaterThan>',
+                      '<ogc:PropertyName>streamorde</ogc:PropertyName>',
+                      '<ogc:Literal>',streamorder-1,'</ogc:Literal>',
+                      '</ogc:PropertyIsGreaterThan>',
+                      '<ogc:BBOX>',
+                      '<ogc:PropertyName>the_geom</ogc:PropertyName>',
+                      '<gml:Envelope>',
+                      '<gml:lowerCorner>',mapRange[3]," ",mapRange[1],'</gml:lowerCorner>',
+                      '<gml:upperCorner>',mapRange[4]," ",mapRange[2],'</gml:upperCorner>',
+                      '</gml:Envelope>',
+                      '</ogc:BBOX>',
+                      '</ogc:And>',
+                      '</ogc:Filter>',
+                      '</wfs:Query>',
+                      '</wfs:GetFeature>')
+  
+  destination = file.path(tempdir(),"nhdflowline_network.zip")
+  file <- POST(postURL, body = filterXML, write_disk(destination, overwrite=T))
+  
+  filePath <- tempdir()
+  print("unzipping...")
+  unzip(destination, exdir = filePath)
+  
+  flowLines <- st_read(filePath, layer = 'nhdflowline_network')
+  
+  return(flowLines)
+}
+```
+
+```{r}
+# set state name to extract river/stream data
+state_names <- c("montana")
+MT_state <- us_states(resolution = "high", states = state_names) %>% st_transform(crs = 4326)    #crs=4326 is same as WGS84
+
+#set coord range for state
+mapRange <- c(range(st_coordinates(MT_state)[,1]), range(st_coordinates(MT_state)[,2]))
+
+#this takes a while to run
+mt_rivers<- get_flowlines(1, mapRange)
+```
+
+
+##### Waterbodies
+
+```{r}
+#load waterbody shapefile
+mt_waterbodies <- read_sf("D:/RRL_maps/HydrologicUnit_10020001/NHDWaterbody.shp")
+
+#pull out only lower lake so plotting is faster 
+lrrl<-mt_waterbodies %>% 
+  filter(GNIS_Name == "Lower Red Rock Lake")
+
+#test plot 
+ggplot() +  
+  geom_sf(data = mt_rivers, lwd = 1, color = "#004C99") +
+  geom_sf(data = lrrl, lwd = 1, color = "#004C99", fill="#d3e8e7") +
+  coord_sf(xlim = c(-111.9,-111.8),
+           ylim = c(44.60, 44.669), expand = F)
+```
+
+
+##### Refuge boundary
+
+```{r}
+#create NWR boundary 
+boundarypoly<-tribble(~lat, ~long,
+                44.65730,    -111.902755,
+                44.651635,   -111.902755,
+                44.651635,   -111.907735,
+                44.644185,   -111.907735,
+                44.644185,   -111.887305,
+                44.633315,   -111.887305,
+                44.633315,   -111.882930,
+                44.629710,   -111.882930,
+                44.629710,   -111.872460,
+                44.621955,   -111.872460,
+                44.621955,   -111.862070,
+                44.607475,   -111.862070,
+                44.607475,   -111.882435,
+                44.600001,   -111.882435)
+
+```
+
+```{r}
+#create label locations
+boundary_label=tibble(x=-111.898,y=44.646, label="NWR Boundary")
+LL_label<-tibble(x=-111.843215, y=44.630478, label = "Lower Red Rock Lake")
+SA_label<-tibble(x=-111.842557, y=44.61625, label = "Study Area Boundary")
+```
+
+```{r}
+#test plot NWR boundary and squared study area boundary
+ggplot(data=boundarypoly, aes(x=long,y=lat)) + geom_path(color="darkgrey", lty=2, size=0.9) + 
+  geom_text(data=boundary_label, aes(x=x,y=y), label="NWR Boundary", size=3) +
+  geom_polygon(data=study_area_sq, aes(x=long,y=lat), fill="#f0f0f0", color="black",size=0.9, alpha=0.5) +
+  geom_text(data=SA_label, aes(x=x,y=y), label="Study Area Boundary", size=3) 
+```
+
+
+
+#### Create Lower Lake Map
+
+```{r}
+lake<-ggplot() +  
+  geom_polygon(data=study_area_sq, aes(x=long,y=lat), fill="#f0f0f0", color="black",size=0.9, alpha=0.5) +
+  geom_sf(data = mt_rivers, lwd = 1, color = "#646464") +
+  geom_sf(data = lrrl, lwd = 1, color = "#646464") +
+  geom_path(data=boundarypoly, aes(x=long,y=lat),fill=NA, color="black",size=0.9, lty=2) +
+  geom_text(data=LL_label, aes(x=x,y=y), label="Lower Red Rock Lake", size=3) +
+  geom_text(data=boundary_label, aes(x=x,y=y), label="NWR Boundary", size=3) +
+  geom_text(data=SA_label, aes(x=x,y=y), label="Study Area Boundary", size=3) +
+  coord_sf(expand = F) + 
+  theme(panel.grid = element_blank()) + 
+  scale_x_continuous(breaks = c(-111.92,-111.88, -111.84), limits = c(-111.92,-111.81)) + 
+  scale_y_continuous(breaks = c(44.61, 44.63, 44.65), limits=c(44.6, 44.665)) +
+  labs(x="",y="") + 
+  theme(axis.text = element_text(size=11)) +
+  annotation_scale(location = "tl", width_hint = 0.5) +
+  annotation_north_arrow(location = "br", which_north = "true",
+        style = north_arrow_fancy_orienteering)
+
+lake
+```
+
+
+#### Create Montana map and inset map
+
+```{r}
+RRL_point<-tibble(x=-111.8499, y=44.6441)
+RRL_label1<-tibble(x=-109, y=45.3, label = "National Wildlife Refuge")
+RRL_label2<-tibble(x=-109.5, y=45.95, label = "Red Rock Lakes")
+
+
+# load in world and state sf
+states <- st_as_sf(map("state", plot = FALSE, fill = TRUE))
+mt_state<-states %>% 
+  filter(ID == "montana")
+
+mt_a1<-ggplot(data = mt_state, fill="white") + geom_sf() + 
+  coord_sf(xlim = c(-117,-103),
+           ylim = c(43.5, 50),expand = FALSE) +
+  geom_text(data=RRL_point, aes(x=x,y=y), label="★", size=11, family = "HiraKakuPro-W3") +
+  geom_text(data=RRL_label1, aes(x=x,y=y), label="National Wildlife Refuge", size=4) +
+  geom_text(data=RRL_label2, aes(x=x,y=y), label="Red Rock Lakes", size=4) +
+  coord_sf(xlim=c(-116.5,-103.5), ylim=c(44,49.5), expand = F, datum = NA) +
+  labs(x="",y="")
+mt_a1
+
+(mt_poly<-ggplot(data = mt_state, fill="white") + geom_sf() + 
+  coord_sf(xlim = c(-117,-103),
+           ylim = c(43.5, 50),expand = FALSE) +
+  geom_point(data=RRL_point, aes(x=x, y=y), pch=18, size=5) +
+  geom_text(data=RRL_label1, aes(x=x,y=y), label="National Wildlife Refuge", size=4) +
+  geom_text(data=RRL_label2, aes(x=x,y=y), label="Red Rock Lakes", size=4) +
+  coord_sf(xlim=c(-116.5,-103.5), ylim=c(44,49.5), expand = F, datum = NA) +
+  labs(x="",y=""))
+
+```
+
+
+#### Put together final plot
+
+```{r, fig.height=6, fig.width=9}
+rrlmap<-cowplot::ggdraw(lake) +
+    cowplot::draw_plot(mt_poly, width = 0.375, height = 0.375, x = 0.185, y = 0.086) 
+rrlmap
+#ggsave(filename = "C:/Users/lcarlson/Box/Lindsay Carlson/RRL_map2.pdf", plot=rrlmap, width = 9, height=6)
+```
+
+
+
+
+
+
+
+
+#### Create zoomed-in Lower Lake Map
+
+
+```{r}
+lake_zoom<-ggplot() +  
+  geom_polygon(data=study_area_sq, aes(x=long,y=lat), fill="#f0f0f0", color="black",size=0.9, alpha=0.5) +
+  geom_sf(data = mt_rivers, lwd = 1, color = "#646464") +
+  geom_sf(data = lrrl, lwd = 1, color = "#646464") +
+  geom_text(data=LL_label, aes(x=x,y=y), label="Lower Red Rock Lake", size=3) +
+  geom_text(data=SA_label, aes(x=x,y=y), label="Study Area Boundary", size=3) +
+  coord_sf(expand = F) + 
+  theme(panel.grid = element_blank()) + 
+  scale_x_continuous(breaks = c(-111.9,-111.86, -111.82), limits = c(-111.9,-111.81)) + 
+  scale_y_continuous(breaks = c(44.62, 44.64, 44.66), limits=c(44.61, 44.665)) +
+  labs(x="",y="") + 
+  theme(axis.text = element_text(size=11)) +
+  annotation_scale(location = "tl", width_hint = 0.5) +
+  annotation_north_arrow(location = "br", which_north = "true",
+        style = north_arrow_fancy_orienteering)
+
+lake_zoom
+```
+
+#### Put together final plot
+
+```{r, fig.height=6, fig.width=9}
+rrlmap<-cowplot::ggdraw(lake_zoom) +
+    cowplot::draw_plot(mt_poly, width = 0.3, height = 0.3, x = 0.189, y = 0.086) 
+rrlmap
+#ggsave(filename = "C:/Users/lcarlson/Box/Lindsay Carlson/RRL_zoom2.pdf", plot=rrlmap, width = 9, height=6)
+```
+
+
+
+
+
+
+```{r}
+#load in FWS boundary data
+fws_wild <- read_sf("D:/RRL_maps/FWS_boundaries/FWSWilderness.shp")  %>% 
+  filter(ORGNAME == "RED ROCK LAKES NATIONAL WILDLIFE REFUGE")
+
+#plot closest boundary to NWR boundary
+ggplot(data = states) + geom_sf() + 
+  geom_sf(data=fws_wild, color="black") +
+  scale_x_continuous(breaks = c(-111.92,-111.88, -111.84), limits = c(-111.92,-111.81)) + 
+  scale_y_continuous(breaks = c(44.61, 44.63, 44.65), limits=c(44.6, 44.665)) 
+```
